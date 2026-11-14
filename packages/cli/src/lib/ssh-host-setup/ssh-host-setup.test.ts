@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import {
+	chmodSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { hostKeyName } from "./host-key";
+import { installCliScript } from "./install-cli";
 import { machineIdProblem } from "./machine-id";
 import { checkPlatform } from "./platform";
 import { parseProbe } from "./probe";
@@ -115,5 +125,56 @@ describe("sshFailureHint", () => {
 		expect(sshFailureHint("", "box")).toBe(
 			"Check it in a terminal first: ssh box",
 		);
+	});
+});
+
+describe("installCliScript", () => {
+	const FAKE_CURL = `#!/bin/sh
+out=
+for arg in "$@"; do
+	case "$arg" in */cli-v2.0.6/superset-darwin-arm64.tar.gz) printf 404; exit 0 ;; esac
+	case "$arg" in */releases/download/*) printf 200; exit 0 ;; esac
+done
+while [ $# -gt 0 ]; do
+	[ "$1" = -o ] && out=$2
+	shift
+done
+echo 'printf %s "$SUPERSET_VERSION" > "$HOME/installed-tag"' > "$out"
+`;
+
+	function installedTag(version: string | null): {
+		tag: string;
+		stderr: string;
+	} {
+		const home = mkdtempSync(join(tmpdir(), "install-cli-"));
+		try {
+			writeFileSync(join(home, "curl"), FAKE_CURL);
+			chmodSync(join(home, "curl"), 0o755);
+			const result = Bun.spawnSync(
+				["sh", "-c", installCliScript({ version, target: "darwin-arm64" })],
+				{ env: { HOME: home, PATH: `${home}:${process.env.PATH}` } },
+			);
+			expect(result.exitCode).toBe(0);
+			return {
+				tag: readFileSync(join(home, "installed-tag"), "utf8"),
+				stderr: result.stderr.toString(),
+			};
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	}
+
+	test("installs the pinned release when it is published", () => {
+		expect(installedTag("2.0.5")).toEqual({ tag: "cli-v2.0.5", stderr: "" });
+	});
+
+	test("falls back to the latest release when the pinned one is not published", () => {
+		const { tag, stderr } = installedTag("2.0.6");
+		expect(tag).toBe("latest");
+		expect(stderr).toContain("Paradev CLI 2.0.6 is not published");
+	});
+
+	test("installs the latest release from a dev build", () => {
+		expect(installedTag(null).tag).toBe("latest");
 	});
 });

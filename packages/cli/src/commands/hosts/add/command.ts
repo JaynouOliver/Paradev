@@ -6,7 +6,6 @@ import {
 	string,
 	wrapText,
 } from "@superset/cli-framework";
-import { CANONICAL_URLS } from "@superset/shared/constants";
 import { getHostId, hostIdFromMachineId } from "@superset/shared/host-info";
 import { type ApiClient, createApiClient } from "../../../lib/api-client";
 import { command } from "../../../lib/command";
@@ -17,6 +16,7 @@ import {
 	hostKeyName,
 	revokeKeysNamed,
 } from "../../../lib/ssh-host-setup/host-key";
+import { installCliScript } from "../../../lib/ssh-host-setup/install-cli";
 import { log } from "../../../lib/ssh-host-setup/log";
 import {
 	MACHINE_ID_FIX,
@@ -37,7 +37,6 @@ import {
 } from "../../../lib/ssh-host-setup/service";
 import { SshSession } from "../../../lib/ssh-host-setup/ssh-session";
 
-const INSTALL_URL = `${CANONICAL_URLS.MARKETING}/cli/install.sh`;
 const ONLINE_TIMEOUT_MS = 120_000;
 
 async function confirmStep(message: string, yes: boolean): Promise<boolean> {
@@ -54,6 +53,7 @@ async function confirmStep(message: string, yes: boolean): Promise<boolean> {
 async function install(
 	ssh: SshSession,
 	facts: RemoteFacts,
+	target: HostTarget,
 	yes: boolean,
 ): Promise<{ bin: string; installed: boolean }> {
 	const wanted = env.VERSION === "0.0.0-dev" ? null : env.VERSION;
@@ -74,12 +74,9 @@ async function install(
 			"Install curl there, then run this again.",
 		);
 	}
-	const tag = wanted ? `cli-v${wanted}` : "latest";
-	const exitCode = await ssh.stream(`set -e
-script=$(mktemp)
-trap 'rm -f "$script"' EXIT
-curl -fsSL ${INSTALL_URL} -o "$script"
-SUPERSET_HOME="$HOME/superset" SUPERSET_VERSION=${tag} sh "$script" --no-next-steps`);
+	const exitCode = await ssh.stream(
+		installCliScript({ version: wanted, target }),
+	);
 	if (exitCode !== 0) {
 		throw new CLIError(`Installing the Paradev CLI on ${ssh.target} failed`);
 	}
@@ -318,7 +315,12 @@ export default command({
 			}
 			log.info(`${facts.hostname} (${platform.target}), host id ${hostId}`);
 
-			const { bin, installed } = await install(ssh, facts, yes);
+			const { bin, installed } = await install(
+				ssh,
+				facts,
+				platform.target,
+				yes,
+			);
 
 			const credential = await signIn({
 				ssh,
